@@ -314,18 +314,22 @@ class T5ModelTester:
     ):
         model = T5Model(config=config).get_decoder().to(torch_device).eval()
         # first forward pass
-        outputs = model(input_ids, use_cache=True)
+        outputs = model(input_ids, attention_mask=attention_mask, use_cache=True)
 
         output, past_key_values = outputs.to_tuple()
 
         # create hypothetical multiple next token and extent to next_input_ids
         next_tokens = ids_tensor((self.batch_size, 3), config.vocab_size)
+        next_mask = ids_tensor((self.batch_size, 3), vocab_size=2)
 
         # append to next input_ids and
         next_input_ids = torch.cat([input_ids, next_tokens], dim=-1)
+        next_attention_mask = torch.cat([attention_mask, next_mask], dim=-1)
 
-        output_from_no_past = model(next_input_ids)["last_hidden_state"]
-        output_from_past = model(next_tokens, past_key_values=past_key_values)["last_hidden_state"]
+        output_from_no_past = model(next_input_ids, attention_mask=next_attention_mask)["last_hidden_state"]
+        output_from_past = model(next_tokens, attention_mask=next_attention_mask, past_key_values=past_key_values)[
+            "last_hidden_state"
+        ]
 
         # select random slice
         random_slice_idx = ids_tensor((1,), output_from_past.shape[-1]).item()
@@ -484,14 +488,7 @@ class T5ModelTest(ModelTesterMixin, GenerationTesterMixin, unittest.TestCase):
 
     all_model_classes = (T5Model, T5ForConditionalGeneration) if is_torch_available() else ()
     all_generative_model_classes = (T5ForConditionalGeneration,) if is_torch_available() else ()
-    all_parallelizable_model_classes = (
-        (
-            T5Model,
-            T5ForConditionalGeneration,
-        )
-        if is_torch_available()
-        else ()
-    )
+    all_parallelizable_model_classes = (T5Model, T5ForConditionalGeneration) if is_torch_available() else ()
     test_pruning = False
     test_torchscript = True
     test_resize_embeddings = True
@@ -560,6 +557,7 @@ class T5ModelTest(ModelTesterMixin, GenerationTesterMixin, unittest.TestCase):
             model = T5Model.from_pretrained(model_name)
             self.assertIsNotNone(model)
 
+    @unittest.skip("Test has a segmentation fault on torch 1.8.0")
     def test_export_to_onnx(self):
         config_and_inputs = self.model_tester.prepare_config_and_inputs()
         model = T5Model(config_and_inputs[0]).to(torch_device)
@@ -616,6 +614,9 @@ class T5EncoderOnlyModelTester:
         self.is_encoder_decoder = is_encoder_decoder
         self.scope = None
         self.is_training = is_training
+
+    def get_large_model_config(self):
+        return T5Config.from_pretrained("t5-base")
 
     def prepare_config_and_inputs(self):
         input_ids = ids_tensor([self.batch_size, self.encoder_seq_length], self.vocab_size)
@@ -694,6 +695,8 @@ class T5EncoderOnlyModelTest(ModelTesterMixin, unittest.TestCase):
     test_pruning = False
     test_torchscript = True
     test_resize_embeddings = False
+    test_model_parallel = True
+    all_parallelizable_model_classes = (T5EncoderModel,) if is_torch_available() else ()
 
     def setUp(self):
         self.model_tester = T5EncoderOnlyModelTester(self)
